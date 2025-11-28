@@ -1,0 +1,283 @@
+//████████████████████████████████████████████████████████████████████
+//█  SECÇÃO 15: FUNÇÃO PRINCIPAL UPDATEALL (CORREÇÕES CRÍTICAS)   █
+//████████████████████████████████████████████████████████████████████
+
+void UpdateAll()
+{
+   if(TimeCurrent() - last_calculation < calculation_interval) 
+      return;
+   last_calculation = TimeCurrent();
+   
+   // ✅ CORREÇÃO: Para o som se já passaram 2 segundos
+   if(sound_playing && (TimeCurrent() - last_sound_time >= 2))
+   {
+      StopSound();
+   }
+   
+   ENUM_TIMEFRAMES chart_tf = (ENUM_TIMEFRAMES)Period();
+   
+   if(!BuildHandlesForTF(chart_tf)) 
+   {
+      Print("❌ ERRO: Falha ao criar handles dos indicadores");
+      return;
+   }
+   
+   double rsi, sma200;
+   if(!ReadOne(handle_rsi_chart, rsi) || !ReadOne(handle_sma_chart, sma200)) 
+   {
+      Print("❌ ERRO: Falha ao ler indicadores RSI/SMA");
+      return;
+   }
+   
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   int trend_direction = IdentifyTrend(chart_tf, price);
+   string trend_text = trend_direction == 1 ? "ALTA" : (trend_direction == -1 ? "BAIXA" : "LATERAL");
+   color trend_color = trend_direction == 1 ? COL_TREND_UP : (trend_direction == -1 ? COL_TREND_DOWN : COL_TREND_SIDE);
+   
+   Print("=== ANÁLISE INICIADA ===");
+   Print("Tendência: ", trend_text, " | Preço: ", FormatPrice(price), " | RSI: ", DoubleToString(rsi, 1));
+   
+   // ✅ CORREÇÃO: Reset COMPLETO das variáveis de confluência
+   support_valid_normal = false; resistance_valid_normal = false;
+   support_valid_contra = false; resistance_valid_contra = false;
+   rsi_oversold_normal = false; rsi_overbought_normal = false;
+   rsi_oversold_contra = false; rsi_overbought_contra = false;
+   fib_valid_normal = false; fib_valid_contra = false;
+   pa_valid_normal = false; pa_valid_contra = false;
+   mtf_valid_normal = false; mtf_valid_contra = false;
+   
+   // 1. SISTEMA SIMPLIFICADO DE SUPORTE E RESISTÊNCIA
+   double support_level = 0, resistance_level = 0;
+   int support_touches = 0, resistance_touches = 0;
+   
+   if(SHOW_SUPPORT_RESISTANCE)
+   {
+      bool sr_calculated = CalculateSmartSupportResistance(chart_tf, support_level, resistance_level, support_touches, resistance_touches);
+      
+      if(sr_calculated)
+      {
+         current_support_level = support_level;
+         current_resistance_level = resistance_level;
+         
+         // ✅ CORREÇÃO: VERIFICAÇÃO SIMPLIFICADA MAS EFICAZ
+         support_valid_normal = (trend_direction == 1 && IsNearStrongSR(price, support_level, support_touches, "SUPORTE"));
+         resistance_valid_normal = (trend_direction == -1 && IsNearStrongSR(price, resistance_level, resistance_touches, "RESISTÊNCIA"));
+         
+         support_valid_contra = (trend_direction == -1 && IsNearStrongSR(price, support_level, support_touches, "SUPORTE"));
+         resistance_valid_contra = (trend_direction == 1 && IsNearStrongSR(price, resistance_level, resistance_touches, "RESISTÊNCIA"));
+         
+         Print("=== S/R SIMPLES ===");
+         Print("Suporte: " + FormatPrice(support_level));
+         Print("Resistência: " + FormatPrice(resistance_level));
+         Print("Suporte Normal Ativo: ", support_valid_normal);
+         Print("Resistência Normal Ativa: ", resistance_valid_normal);
+         Print("Suporte Contra Ativo: ", support_valid_contra);
+         Print("Resistência Contra Ativa: ", resistance_valid_contra);
+      }
+      else
+      {
+         Print("❌ Falha no cálculo de S/R simples");
+      }
+   }
+   
+   // 2. RSI - ✅ CORREÇÃO: LÓGICA SIMPLIFICADA
+   if(SHOW_RSI)
+   {
+      rsi_oversold_normal = (trend_direction == 1 && rsi <= 30);
+      rsi_overbought_normal = (trend_direction == -1 && rsi >= 70);
+      rsi_oversold_contra = (trend_direction == -1 && rsi <= 25);
+      rsi_overbought_contra = (trend_direction == 1 && rsi >= 75);
+      
+      Print("=== RSI ===");
+      Print("RSI: ", DoubleToString(rsi, 1));
+      Print("Oversold Normal: ", rsi_oversold_normal);
+      Print("Overbought Normal: ", rsi_overbought_normal);
+      Print("Oversold Contra: ", rsi_oversold_contra);
+      Print("Overbought Contra: ", rsi_overbought_contra);
+   }
+   
+   // 3. PRICE ACTION - ✅ CORREÇÃO: APENAS VELAS FECHADAS
+   bool pa_analysis_result = false;
+   if(SHOW_PRICE_ACTION)
+   {
+      pa_analysis_result = AnalyzePriceAction(chart_tf, PA_CANDLES_LOOKBACK);
+      pa_valid_normal = (trend_direction == 1 && pa_bullish) || (trend_direction == -1 && pa_bearish);
+      pa_valid_contra = (trend_direction == -1 && pa_bullish) || (trend_direction == 1 && pa_bearish);
+      
+      Print("=== PRICE ACTION ===");
+      Print("Pattern: ", pa_pattern);
+      Print("Bullish: ", pa_bullish, " | Bearish: ", pa_bearish);
+      Print("PA Normal Ativo: ", pa_valid_normal);
+      Print("PA Contra Ativo: ", pa_valid_contra);
+      Print("PA Análise Resultado: ", pa_analysis_result);
+   }
+   else
+   {
+      // Se PRICE ACTION está desativado, limpa todos os marcadores
+      ClearPriceActionMarkers();
+      pa_text = "PA: INATIVO";
+      pa_pattern = "NENHUM";
+      pa_valid_normal = false;
+      pa_valid_contra = false;
+   }
+   
+   // 4. MULTI TIMEFRAME - ✅ CORREÇÃO: VARIÁVEIS GLOBAIS
+   mtf_aligned_tfs = CheckMTFConfirmation(chart_tf);
+   mtf_valid_normal = IsMTFValidForTrend(trend_direction, mtf_aligned_tfs);
+   mtf_valid_contra = false; // Contra-tendência não usa MTF
+   
+   Print("=== MULTI TIMEFRAME ===");
+   Print("MTF Alinhados: ", mtf_aligned_tfs);
+   Print("MTF Válido Normal: ", mtf_valid_normal);
+   Print("MTF Válido Contra: ", mtf_valid_contra);
+   
+   // 5. FIBONACCI - ✅ CORREÇÃO: LÓGICA COMPLETAMENTE REVISADA
+   double fib_0 = 0, fib_50 = 0, fib_618 = 0, fib_100 = 0, fib_786 = 0, fib_382 = 0;
+   fib_valid_normal = false;
+   fib_valid_contra = false; // Fibonacci não é usado em contra-tendência
+
+   if(SHOW_FIBONACCI && trend_direction != 0)
+   {
+      bool fib_calculated = ComputeFibLevels(chart_tf, trend_direction, fib_0, fib_50, fib_618, fib_100, fib_786, fib_382);
+      
+      if(fib_calculated)
+      {
+         Print("🎯🎯🎯 FIBONACCI CALCULADO ===");
+         Print("0%: ", FormatPrice(fib_0), " | 50%: ", FormatPrice(fib_50), " | 61.8%: ", FormatPrice(fib_618), " | 100%: ", FormatPrice(fib_100));
+         
+         bool should_remove = ShouldRemoveFibonacci(price, fib_0, fib_100, trend_direction);
+         
+         if(!should_remove)
+         {
+            DrawFibonacciLevels(fib_0, fib_50, fib_618, fib_100, trend_direction);
+            
+            // ✅✅✅ VERIFICAÇÃO ESTRITA: CONFLUÊNCIA ATIVA APENAS ENTRE 50%-61.8%
+            fib_valid_normal = IsFibonacciActive(price, fib_50, fib_618, trend_direction);
+            
+            if(fib_valid_normal)
+            {
+               Print("✅✅✅ FIBONACCI GOLDEN ZONE - Confluência ATIVA (50%-61.8%)");
+            }
+            else
+            {
+               Print("❌❌❌ Fibonacci INATIVO - Fora da Golden Zone 50%-61.8%");
+            }
+         }
+         else
+         {
+            ClearFibonacciLevels();
+            fib_valid_normal = false;
+            Print("🔴🔴🔴 Fibonacci REMOVIDO - Preço fora dos limites 45%-65%");
+         }
+      }
+      else
+      {
+         ClearFibonacciLevels();
+         fib_valid_normal = false;
+         Print("Fibonacci: Não calculado - movimento insuficiente");
+      }
+   }
+   else if(SHOW_FIBONACCI && trend_direction == 0)
+   {
+      ClearFibonacciLevels();
+      fib_valid_normal = false;
+      Print("Fibonacci: Bloqueado - tendência lateral");
+   }
+   else if(!SHOW_FIBONACCI)
+   {
+      // ✅ SE FIBONACCI ESTÁ DESATIVADO, LIMPAR TUDO
+      ClearFibonacciLevels();
+      fib_valid_normal = false;
+   }
+   
+   // 6. VERIFICAÇÃO DE CONTRA-TENDÊNCIA - ✅ CORREÇÃO: LÓGICA SIMPLIFICADA
+   bool contra_signal = CheckContraTrendSignal(trend_direction, rsi, support_valid_contra, resistance_valid_contra, pa_bullish, pa_bearish);
+   
+   Print("=== CONTRA-TENDÊNCIA ===");
+   Print("Sinal Contra: ", contra_signal);
+   Print("Tipo Contra: ", contra_trend_type);
+   
+   // 7. CONTAGEM DE CONFLUÊNCIAS - ✅ CORREÇÃO: CONTAGEM PRECISA
+   int confluences_normal = 0, confluences_contra = 0;
+   int confluences_normal_no_mtf = 0, confluences_contra_no_mtf = 0;
+   bool has_mtf_normal = false, has_mtf_contra = false;
+   
+   CountConfluencesWithMTF(false, confluences_normal, confluences_normal_no_mtf, has_mtf_normal);
+   CountConfluencesWithMTF(true, confluences_contra, confluences_contra_no_mtf, has_mtf_contra);
+   
+   Print("=== CONTAGEM DE CONFLUÊNCIAS ===");
+   Print("Confluências Normal: ", confluences_normal, " (Reais: ", confluences_normal_no_mtf, ")");
+   Print("Confluências Contra: ", confluences_contra, " (Reais: ", confluences_contra_no_mtf, ")");
+   Print("MTF Normal: ", has_mtf_normal, " | MTF Contra: ", has_mtf_contra);
+   
+   // ✅ CORREÇÃO: Limpeza de PA se não está ativo
+   if(SHOW_PRICE_ACTION && !pa_valid_normal && !pa_valid_contra && pa_active)
+   {
+      Print("🔁 PA deixou de estar ativo - limpando marcadores");
+      ClearPriceActionMarkers();
+      pa_active = false;
+   }
+   
+   // 8. DETERMINAÇÃO DO SINAL FINAL - ✅ CORREÇÃO: LÓGICA PRIORITÁRIA
+   string final_signal = "AGUARDAR";
+   color signal_color = COL_ACTION_WAIT;
+   int active_confluences = 0;
+   int active_confluences_for_sound = 0;
+
+   bool strong_signal_normal = (confluences_normal_no_mtf >= 3);
+   bool strong_signal_contra = (confluences_contra_no_mtf >= 3);
+   bool moderate_signal_normal = (confluences_normal_no_mtf >= 2 && has_mtf_normal);
+
+   if(contra_signal && strong_signal_contra)
+   {
+      final_signal = (contra_trend_type == "COMPRA") ? "COMPRA (CONTRA-TENDÊNCIA)" : "VENDA (CONTRA-TENDÊNCIA)";
+      signal_color = COL_CONTRA_TREND;
+      active_confluences = confluences_contra;
+      active_confluences_for_sound = confluences_contra_no_mtf;
+      Print("🎯 SINAL CONTRA-TENDÊNCIA ATIVADO - 3+ Confluências Reais");
+   }
+   else if(strong_signal_normal)
+   {
+      final_signal = trend_direction == 1 ? "COMPRA" : "VENDA";
+      signal_color = trend_direction == 1 ? COL_ACTION_BUY : COL_ACTION_SELL;
+      active_confluences = confluences_normal;
+      active_confluences_for_sound = confluences_normal_no_mtf;
+      Print("🎯 SINAL TENDÊNCIA NORMAL FORTE - 3+ Confluências Reais");
+   }
+   else if(moderate_signal_normal)
+   {
+      final_signal = "ALERTA " + (trend_direction == 1 ? "COMPRA" : "VENDA");
+      signal_color = COL_ACTION_WAIT;
+      active_confluences = confluences_normal;
+      active_confluences_for_sound = confluences_normal_no_mtf;
+      Print("⚠️  SINAL TENDÊNCIA NORMAL MODERADO - 2 Confluências Reais + MTF");
+   }
+   else if(contra_signal && confluences_contra_no_mtf > 0)
+   {
+      final_signal = "ALERTA " + contra_trend_type + " (CONTRA-FRACO)";
+      signal_color = COL_ACTION_WAIT;
+      active_confluences = confluences_contra;
+      active_confluences_for_sound = confluences_contra_no_mtf;
+      Print("⚠️  SINAL CONTRA-TENDÊNCIA FRACO");
+   }
+   else
+   {
+      final_signal = "AGUARDAR CONFLUÊNCIAS";
+      signal_color = COL_ACTION_WAIT;
+      active_confluences = 0;
+      active_confluences_for_sound = 0;
+      Print("⏳ Aguardando 3 confluências reais");
+   }
+
+   // 9. SISTEMA DE ALERTAS - ✅ CORREÇÃO: CHAMADA CORRETA
+   ProcessFinalSignal(final_signal, active_confluences_for_sound, trend_text);
+
+   // 10. ATUALIZAR PAINEL VISUAL - ✅ CORREÇÃO: PASSAGEM CORRETA DE PARÂMETROS
+   CreateVisualPanel(trend_text, trend_color, final_signal, signal_color, price, 
+                    confluences_normal, confluences_contra, rsi, has_mtf_normal, has_mtf_contra);
+   
+   Print("=== ANÁLISE CONCLUÍDA ===");
+   Print("SINAL FINAL: ", final_signal);
+   Print("Confluências: ", active_confluences, " | Confluências Reais: ", active_confluences_for_sound);
+   Print("=================================");
+}
